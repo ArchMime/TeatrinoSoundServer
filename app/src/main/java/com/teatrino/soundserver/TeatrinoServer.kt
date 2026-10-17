@@ -49,7 +49,15 @@ class TeatrinoServerConfig {
 
 fun iniciarServidorWeb(): EmbeddedServer<CIOApplicationEngine, CIOApplicationEngine.Configuration> {
     return embeddedServer(CIO, port = 8080, host = "0.0.0.0") {
-        install(WebSockets)
+
+        install(WebSockets) {
+
+            pingPeriodMillis = 15_000L
+
+            timeoutMillis = 30_000L
+
+            maxFrameSize = Long.MAX_VALUE
+        }
 
         routing {
             staticResources(remotePath = "/", basePackage = "static")

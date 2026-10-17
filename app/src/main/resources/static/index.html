@@ -78,73 +78,67 @@
 
 <script>
     let socket = null;
-    const direccionServidor = window.location.host;
+let reconectandoTimer = null;
 
-    function conectarWebSocket() {
-        const urlSocket = `ws://${direccionServidor}/socket`;
-        socket = new WebSocket(urlSocket);
-        const estadoDiv = document.getElementById("estado");
-        const contenedor = document.getElementById("contenedor-botones");
+function conectarWebSocket() {
+    // Autodetección dinámica de IP que ya tienes implementada
+    const host = window.location.host;
 
-        socket.onopen = () => {
-            estadoDiv.innerText = "🟢 Conectado con el Servidor Android";
-            estadoDiv.className = "conectado";
-        };
+    console.log(" Intentando conectar al servidor de audio en: ws://" + host + "/socket");
 
-        socket.onclose = () => {
-            estadoDiv.innerText = "🔴 Desconectado - Intentando reconectar...";
-            estadoDiv.className = "desconectado";
-            contenedor.innerHTML = "";
-            setTimeout(conectarWebSocket, 3000);
-        };
+    // Crear la instancia del socket
+    socket = new WebSocket("ws://" + host + "/socket");
 
-        document.getElementById("btn-stop-global").onclick = () => {
-            if (socket && socket.readyState === WebSocket.OPEN) {
-                socket.send(JSON.stringify({ accion: "STOP", id: "" }));
+    socket.onopen = function() {
+        console.log(" [WEB-CLIENT] ¡Conectado exitosamente con Teatrino Server!");
+        // Si había un temporizador de reconexión activo, lo limpiamos
+        if (reconectandoTimer) {
+            clearTimeout(reconectandoTimer);
+            reconectandoTimer = null;
+        }
+    };
+
+    socket.onmessage = function(event) {
+        try {
+            const datos = JSON.parse(event.data);
+
+            // Aquí procesas el protocolo de red que ya creaste (ACTUALIZAR_BOTONERA)
+            if (datos.evento === "ACTUALIZAR_BOTONERA") {
+                renderizarBotoneraBajoGrid(datos.sonidos);
             }
-        };
+        } catch (error) {
+            console.error("Error al procesar JSON entrante:", error);
+        }
+    };
 
-        // NUEVO: Capturar el movimiento del deslizador de volumen en tiempo real
-        document.getElementById("slider-volumen").oninput = (event) => {
-            if (socket && socket.readyState === WebSocket.OPEN) {
-                const porcentaje = event.target.value;
-                const valorFlotante = porcentaje / 100; // Transformamos de 0-100 a un flotante 0.0-1.0
+    socket.onclose = function(event) {
+        console.warn(" [WEB-CLIENT] Conexión perdida con el servidor. Motivo:", event.reason);
+        destruirYLimpiarBotoneraVisual(); // Limpia los botones para avisar visualmente del corte
+        forzarReconexion();
+    };
 
-                socket.send(JSON.stringify({
-                    accion: "VOLUME",
-                    id: "",
-                    valor: valorFlotante
-                }));
-            }
-        };
+    socket.onerror = function(error) {
+        console.error(" [WEB-CLIENT] Error detectado en el canal de red:", error);
+        socket.close(); // Forzamos el gatillo de onclose para unificar la reconexión
+    };
+}
 
-        socket.onmessage = (event) => {
-            try {
-                const datos = JSON.parse(event.data);
-                const listaSonidos = datos.sonidos || (Array.isArray(datos) ? datos : null);
+function forzarReconexion() {
+    // Evitamos duplicar temporizadores si ya hay uno corriendo
+    if (reconectandoTimer) return;
 
-                if (listaSonidos) {
-                    contenedor.innerHTML = "";
-                    listaSonidos.forEach(sonido => {
-                        const boton = document.createElement("button");
-                        boton.className = "btn-sonido";
-                        boton.innerHTML = `${sonido.nombreBoton} <span class="nombre-archivo">${sonido.nombreArchivo}</span>`;
+    console.log(" Reintentando enlace inalámbrico en 2 segundos...");
+    reconectandoTimer = setTimeout(function() {
+        reconectandoTimer = null;
+        conectarWebSocket();
+    }, 2000); // Reintenta de forma constante cada 2 segundos sin saturar la CPU
+}
 
-                        boton.onclick = () => {
-                            const comando = { accion: "PLAY", id: sonido.id };
-                            socket.send(JSON.stringify(comando));
-                        };
-
-                        contenedor.appendChild(boton);
-                    });
-                }
-            } catch (error) {
-                console.error("Error en el cliente web:", error);
-            }
-        };
-    }
-
+// Iniciar el ciclo de vida de la red al cargar la página de la tablet
+window.addEventListener("DOMContentLoaded", (event) => {
     conectarWebSocket();
+});
+
 </script>
 </body>
 
