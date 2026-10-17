@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Teatrino Control Panel</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #121212;
+            color: #ffffff;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        h1 { color: #00adb5; margin-bottom: 5px; }
+        #estado { font-weight: bold; padding: 8px; margin-bottom: 20px; border-radius: 4px; }
+        .conectado { background-color: #1b5e20; color: #e8f5e9; }
+        .desconectado { background-color: #b71c1c; color: #ffebee; }
+
+        #contenedor-botones {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+            gap: 15px;
+            width: 100%;
+            max-width: 800px;
+        }
+
+        .btn-sonido {
+            background-color: #222831;
+            border: 2px solid #393e46;
+            color: #eeeeee;
+            padding: 25px 15px;
+            font-size: 1.2rem;
+            font-weight: bold;
+            border-radius: 8px;
+            cursor: pointer;
+            text-align: center;
+            transition: all 0.2s ease;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        }
+        .btn-sonido:active {
+            transform: scale(0.95);
+            background-color: #00adb5;
+            color: #121212;
+            border-color: #00adb5;
+        }
+        .nombre-archivo {
+            display: block;
+            font-size: 0.7rem;
+            color: #888888;
+            margin-top: 5px;
+            font-weight: normal;
+            word-break: break-all;
+        }
+    </style>
+</head>
+
+<body>
+
+<h1>Teatrino Sound Server</h1>
+<div id="estado" class="desconectado">🔴 Desconectado</div>
+
+<!-- Botón de STOP Global -->
+<button id="btn-stop-global" style="background-color: #b71c1c; color: white; border: none; padding: 15px 40px; font-size: 1.3rem; font-weight: bold; border-radius: 8px; cursor: pointer; margin-bottom: 20px; width: 100%; max-width: 800px; box-shadow: 0 4px 10px rgba(0,0,0,0.5);">
+    🛑 STOP GENERAL (Cortar Audio)
+</button>
+
+<!-- NUEVO: Slider de control de volumen máster -->
+<div style="width: 100%; max-width: 800px; background-color: #222831; padding: 15px; border-radius: 8px; margin-bottom: 25px; box-sizing: border-box; border: 1px solid #393e46; display: flex; align-items: center; gap: 15px;">
+    <span style="font-weight: bold; font-size: 1.1rem; color: #00adb5; min-width: 90px;">🔊 Volumen:</span>
+    <input type="range" id="slider-volumen" min="0" max="100" value="100" style="flex: 1; accent-color: #00adb5; cursor: pointer; height: 8px;">
+</div>
+
+<div id="contenedor-botones"></div>
+
+<script>
+    let socket = null;
+    const direccionServidor = window.location.host;
+
+    function conectarWebSocket() {
+        const urlSocket = `ws://${direccionServidor}/socket`;
+        socket = new WebSocket(urlSocket);
+        const estadoDiv = document.getElementById("estado");
+        const contenedor = document.getElementById("contenedor-botones");
+
+        socket.onopen = () => {
+            estadoDiv.innerText = "🟢 Conectado con el Servidor Android";
+            estadoDiv.className = "conectado";
+        };
+
+        socket.onclose = () => {
+            estadoDiv.innerText = "🔴 Desconectado - Intentando reconectar...";
+            estadoDiv.className = "desconectado";
+            contenedor.innerHTML = "";
+            setTimeout(conectarWebSocket, 3000);
+        };
+
+        document.getElementById("btn-stop-global").onclick = () => {
+            if (socket && socket.readyState === WebSocket.OPEN) {
+                socket.send(JSON.stringify({ accion: "STOP", id: "" }));
+            }
+        };
+
+        // NUEVO: Capturar el movimiento del deslizador de volumen en tiempo real
+        document.getElementById("slider-volumen").oninput = (event) => {
+            if (socket && socket.readyState === WebSocket.OPEN) {
+                const porcentaje = event.target.value;
+                const valorFlotante = porcentaje / 100; // Transformamos de 0-100 a un flotante 0.0-1.0
+
+                socket.send(JSON.stringify({
+                    accion: "VOLUME",
+                    id: "",
+                    valor: valorFlotante
+                }));
+            }
+        };
+
+        socket.onmessage = (event) => {
+            try {
+                const datos = JSON.parse(event.data);
+                const listaSonidos = datos.sonidos || (Array.isArray(datos) ? datos : null);
+
+                if (listaSonidos) {
+                    contenedor.innerHTML = "";
+                    listaSonidos.forEach(sonido => {
+                        const boton = document.createElement("button");
+                        boton.className = "btn-sonido";
+                        boton.innerHTML = `${sonido.nombreBoton} <span class="nombre-archivo">${sonido.nombreArchivo}</span>`;
+
+                        boton.onclick = () => {
+                            const comando = { accion: "PLAY", id: sonido.id };
+                            socket.send(JSON.stringify(comando));
+                        };
+
+                        contenedor.appendChild(boton);
+                    });
+                }
+            } catch (error) {
+                console.error("Error en el cliente web:", error);
+            }
+        };
+    }
+
+    conectarWebSocket();
+</script>
+</body>
+
+</html>
