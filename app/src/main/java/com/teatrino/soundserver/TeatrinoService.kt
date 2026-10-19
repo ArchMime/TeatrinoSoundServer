@@ -10,21 +10,25 @@ import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import io.ktor.server.engine.EmbeddedServer
-import kotlin.concurrent.thread
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 class TeatrinoService : Service() {
-
     private var servidorWeb: EmbeddedServer<*, *>? = null
     private val CHANNEL_ID = "TeatrinoServerChannel"
 
-    // ALMACÉN ESTÁTICO DE INYECCIÓN: Expone el contexto de Android de forma limpia a Ktor
+    // Ámbito de corrutinas supervisor que protege a Ktor contra el ahorro de energía
+    private val servicioJob = SupervisorJob()
+    private val scopeServicio = CoroutineScope(Dispatchers.Default + servicioJob)
+
     companion object {
         var contextoAplicacion: Context? = null
     }
 
     override fun onCreate() {
         super.onCreate()
-        // Capturamos el contexto real de la app en cuanto Android inicializa el servicio
         contextoAplicacion = applicationContext
         crearCanalDeNotificacion()
     }
@@ -32,23 +36,30 @@ class TeatrinoService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val notificacion = construirNotificacion()
 
-        // Verificación de simetría obligatoria para Android 14+ (SDK 34 a 37)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(1, notificacion, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
+            startForeground(
+                1,
+                notificacion,
+                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
+            )
         } else {
             startForeground(1, notificacion)
         }
 
-        thread {
+        // Iniciamos Ktor de forma segura vinculándolo al ciclo de vida del Foreground Service
+        scopeServicio.launch {
             try {
                 if (servidorWeb == null) {
                     val ipDetectada = obtenerIpLocal() ?: "127.0.0.1"
                     MainActivity.ipServidor = ipDetectada
 
                     servidorWeb = iniciarServidorWeb()
-                    servidorWeb?.start(wait = true)
+                    // wait = false evita congelar el hilo. El servidor vive gracias a scopeServicio.
+                    servidorWeb?.start(wait = false)
+                    println(" [LOG-SERVER] Ktor iniciado con éxito en CoroutineScope.")
                 }
             } catch (e: Exception) {
+                println(" [LOG-SERVER] Error al arrancar Ktor: ${e.message}")
                 e.printStackTrace()
             }
         }
@@ -57,15 +68,18 @@ class TeatrinoService : Service() {
     }
 
     override fun onDestroy() {
-        thread {
-            try {
-                servidorWeb?.stop(500, 1000)
-                servidorWeb = null
-                MainActivity.ipServidor = "Desconocida"
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
+        // Detiene de golpe todas las corrutinas que use el servicio
+        servicioJob.cancel()
+
+        try {
+            servidorWeb?.stop(500, 1000)
+            servidorWeb = null
+            MainActivity.ipServidor = "Desconocida"
+            println(" [LOG-SERVER] Servidor Ktor detenido limpiamente.")
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
+
         super.onDestroy()
     }
 

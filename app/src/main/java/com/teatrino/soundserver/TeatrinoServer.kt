@@ -1,20 +1,19 @@
 package com.teatrino.soundserver
 
-import io.ktor.server.engine.EmbeddedServer
-import io.ktor.server.engine.embeddedServer
+import io.ktor.server.application.install
 import io.ktor.server.cio.CIO
 import io.ktor.server.cio.CIOApplicationEngine
-import io.ktor.server.routing.routing
+import io.ktor.server.engine.EmbeddedServer
+import io.ktor.server.engine.embeddedServer
 import io.ktor.server.http.content.staticResources
-import io.ktor.server.application.install
+import io.ktor.server.routing.routing
+import io.ktor.server.websocket.WebSocketServerSession
 import io.ktor.server.websocket.WebSockets
 import io.ktor.server.websocket.webSocket
 import io.ktor.websocket.Frame
 import io.ktor.websocket.readText
-import io.ktor.websocket.send
-import io.ktor.server.websocket.WebSocketServerSession
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 
 class TeatrinoServerConfig {
     companion object {
@@ -27,12 +26,17 @@ class TeatrinoServerConfig {
             val sesion = sesionActiva ?: return
             try {
                 // Copia segura de la lista de Compose libre de bloqueos de hilos
-                val copiaEstatica = androidx.compose.runtime.snapshots.Snapshot.withoutReadObservation {
-                    MainActivity.listaSonidosSesion.toList()
-                }
+                val copiaEstatica =
+                    androidx.compose.runtime.snapshots.Snapshot.withoutReadObservation {
+                        MainActivity.listaSonidosSesion.toList()
+                    }
 
                 val listaSimplificada = copiaEstatica.map { sonido ->
-                    SonidoJson(id = sonido.id, nombreBoton = sonido.nombreBoton, nombreArchivo = sonido.nombreArchivo)
+                    SonidoJson(
+                        id = sonido.id,
+                        nombreBoton = sonido.nombreBoton,
+                        nombreArchivo = sonido.nombreArchivo
+                    )
                 }
 
                 val paquete = RespuestaBotonera(sonidos = listaSimplificada)
@@ -50,14 +54,15 @@ class TeatrinoServerConfig {
 fun iniciarServidorWeb(): EmbeddedServer<CIOApplicationEngine, CIOApplicationEngine.Configuration> {
     return embeddedServer(CIO, port = 8080, host = "0.0.0.0") {
 
+        // Busca esto dentro de tu TeatrinoServer.kt y modifícalo para que quede así:
         install(WebSockets) {
-
-            pingPeriodMillis = 15_000L
-
-            timeoutMillis = 30_000L
-
+            pingPeriodMillis =
+                15_000L  // Envía un latido cada 15 segundos para mantener caliente el canal
+            timeoutMillis =
+                30_000L     // Si la tablet pasa 30 segundos sin responder, libera el socket
             maxFrameSize = Long.MAX_VALUE
         }
+
 
         routing {
             staticResources(remotePath = "/", basePackage = "static")
@@ -118,12 +123,18 @@ fun iniciarServidorWeb(): EmbeddedServer<CIOApplicationEngine, CIOApplicationEng
                                                     println("▶️ [LOG-SERVER] Reanudando: ${sonidoEncontrado.nombreArchivo}")
                                                 } else {
                                                     // Fallback por si terminó solo: arranca de cero
-                                                    AudioPlayerManager.reproducirAudio(contextoAndroid, sonidoEncontrado.uriString)
+                                                    AudioPlayerManager.reproducirAudio(
+                                                        contextoAndroid,
+                                                        sonidoEncontrado.uriString
+                                                    )
                                                 }
                                             } else {
                                                 // Es un sonido NUEVO o DIFERENTE: arranca de cero de inmediato
                                                 println("🎵 [LOG-SERVER] Cambiando de tema a: ${sonidoEncontrado.nombreArchivo}")
-                                                AudioPlayerManager.reproducirAudio(contextoAndroid, sonidoEncontrado.uriString)
+                                                AudioPlayerManager.reproducirAudio(
+                                                    contextoAndroid,
+                                                    sonidoEncontrado.uriString
+                                                )
                                                 idSonidoActual = comando.id
                                                 estaPausado = false
                                             }

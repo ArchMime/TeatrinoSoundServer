@@ -4,142 +4,30 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Teatrino Control Panel</title>
-    <style>
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background-color: #121212;
-            color: #ffffff;
-            margin: 0;
-            padding: 20px;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-        }
-        h1 { color: #00adb5; margin-bottom: 5px; }
-        #estado { font-weight: bold; padding: 8px; margin-bottom: 20px; border-radius: 4px; }
-        .conectado { background-color: #1b5e20; color: #e8f5e9; }
-        .desconectado { background-color: #b71c1c; color: #ffebee; }
-
-        #contenedor-botones {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-            gap: 15px;
-            width: 100%;
-            max-width: 800px;
-        }
-
-        .btn-sonido {
-            background-color: #222831;
-            border: 2px solid #393e46;
-            color: #eeeeee;
-            padding: 25px 15px;
-            font-size: 1.2rem;
-            font-weight: bold;
-            border-radius: 8px;
-            cursor: pointer;
-            text-align: center;
-            transition: all 0.2s ease;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
-        }
-        .btn-sonido:active {
-            transform: scale(0.95);
-            background-color: #00adb5;
-            color: #121212;
-            border-color: #00adb5;
-        }
-        .nombre-archivo {
-            display: block;
-            font-size: 0.7rem;
-            color: #888888;
-            margin-top: 5px;
-            font-weight: normal;
-            word-break: break-all;
-        }
-    </style>
+    <!-- Vinculación del archivo CSS externo -->
+    <link rel="stylesheet" href="estilos.css">
 </head>
-
 <body>
 
-<h1>Teatrino Sound Server</h1>
-<div id="estado" class="desconectado">🔴 Desconectado</div>
+<div class="barra-control">
+    <!-- Gatillo obligatorio de interacción para Fullscreen + WakeLock -->
+    <button id="btnModoFuncion" onclick="engranarModoFuncion()">🎭 ENTRAR EN MODO FUNCIÓN</button>
 
-<!-- Botón de STOP Global -->
-<button id="btn-stop-global" style="background-color: #b71c1c; color: white; border: none; padding: 15px 40px; font-size: 1.3rem; font-weight: bold; border-radius: 8px; cursor: pointer; margin-bottom: 20px; width: 100%; max-width: 800px; box-shadow: 0 4px 10px rgba(0,0,0,0.5);">
-    🛑 STOP GENERAL (Cortar Audio)
-</button>
+    <div class="contenedor-volumen">
+        <span>🔊</span>
+        <input type="range" class="slider-volumen" min="0" max="1" step="0.05" value="1"
+               oninput="transmitirVolumen(this.value)">
+    </div>
 
-<!-- NUEVO: Slider de control de volumen máster -->
-<div style="width: 100%; max-width: 800px; background-color: #222831; padding: 15px; border-radius: 8px; margin-bottom: 25px; box-sizing: border-box; border: 1px solid #393e46; display: flex; align-items: center; gap: 15px;">
-    <span style="font-weight: bold; font-size: 1.1rem; color: #00adb5; min-width: 90px;">🔊 Volumen:</span>
-    <input type="range" id="slider-volumen" min="0" max="100" value="100" style="flex: 1; accent-color: #00adb5; cursor: pointer; height: 8px;">
+    <span id="txtEstado" class="estado-conexion">Buscando Servidor...</span>
+
+    <button class="btn-stop" onclick="enviarComando('STOP', '0')">🛑 STOP GENERAL</button>
 </div>
 
-<div id="contenedor-botones"></div>
+<!-- Contenedor dinámico e inmune a bloqueos -->
+<div id="contenedorGrid" class="grid-botonera"></div>
 
-<script>
-    let socket = null;
-let reconectandoTimer = null;
-
-function conectarWebSocket() {
-    // Autodetección dinámica de IP que ya tienes implementada
-    const host = window.location.host;
-
-    console.log(" Intentando conectar al servidor de audio en: ws://" + host + "/socket");
-
-    // Crear la instancia del socket
-    socket = new WebSocket("ws://" + host + "/socket");
-
-    socket.onopen = function() {
-        console.log(" [WEB-CLIENT] ¡Conectado exitosamente con Teatrino Server!");
-        // Si había un temporizador de reconexión activo, lo limpiamos
-        if (reconectandoTimer) {
-            clearTimeout(reconectandoTimer);
-            reconectandoTimer = null;
-        }
-    };
-
-    socket.onmessage = function(event) {
-        try {
-            const datos = JSON.parse(event.data);
-
-            // Aquí procesas el protocolo de red que ya creaste (ACTUALIZAR_BOTONERA)
-            if (datos.evento === "ACTUALIZAR_BOTONERA") {
-                renderizarBotoneraBajoGrid(datos.sonidos);
-            }
-        } catch (error) {
-            console.error("Error al procesar JSON entrante:", error);
-        }
-    };
-
-    socket.onclose = function(event) {
-        console.warn(" [WEB-CLIENT] Conexión perdida con el servidor. Motivo:", event.reason);
-        destruirYLimpiarBotoneraVisual(); // Limpia los botones para avisar visualmente del corte
-        forzarReconexion();
-    };
-
-    socket.onerror = function(error) {
-        console.error(" [WEB-CLIENT] Error detectado en el canal de red:", error);
-        socket.close(); // Forzamos el gatillo de onclose para unificar la reconexión
-    };
-}
-
-function forzarReconexion() {
-    // Evitamos duplicar temporizadores si ya hay uno corriendo
-    if (reconectandoTimer) return;
-
-    console.log(" Reintentando enlace inalámbrico en 2 segundos...");
-    reconectandoTimer = setTimeout(function() {
-        reconectandoTimer = null;
-        conectarWebSocket();
-    }, 2000); // Reintenta de forma constante cada 2 segundos sin saturar la CPU
-}
-
-// Iniciar el ciclo de vida de la red al cargar la página de la tablet
-window.addEventListener("DOMContentLoaded", (event) => {
-    conectarWebSocket();
-});
-
-</script>
+<!-- Vinculación del archivo JavaScript externo -->
+<script src="controlador.js"></script>
 </body>
-
 </html>
