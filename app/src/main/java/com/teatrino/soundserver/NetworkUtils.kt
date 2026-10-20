@@ -1,39 +1,51 @@
 package com.teatrino.soundserver
 
+import android.content.Context
+import android.net.wifi.WifiManager
 import java.net.NetworkInterface
-import java.net.Inet4Address
-import java.util.Collections
 
-/**
- * Función utilitaria para escanear las interfaces de red del celular
- * y extraer la dirección IPv4 local activa.
- */
-fun obtenerIpLocal(): String? {
-    try {
-        // 1. Obtenemos todas las interfaces de red (Wi-Fi, Datos, Hotspot, Loopback...)
-        val interfaces = Collections.list(NetworkInterface.getNetworkInterfaces())
+object NetworkUtils {
+    fun obtenerIp(context: Context): String {
+        // Método 1: WifiManager (el que funciona en moto g35)
+        try {
+            val wifiManager =
+                context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+            val ipInt = wifiManager.connectionInfo.ipAddress
+            if (ipInt != 0) {
+                return String.format(
+                    "%d.%d.%d.%d",
+                    ipInt and 0xff,
+                    ipInt shr 8 and 0xff,
+                    ipInt shr 16 and 0xff,
+                    ipInt shr 24 and 0xff
+                )
+            }
+        } catch (e: Exception) {
+        }
 
-        // 2. Recorremos cada interfaz encontrada
-        for (interfaz in interfaces) {
-            // Saltamos interfaces que estén apagadas o sean de bucle local (localhost / 127.0.0.1)
-            if (!interfaz.isUp || interfaz.isLoopback) continue
-
-            // 3. Revisamos las direcciones asignadas a esta interfaz
-            val direcciones = Collections.list(interfaz.inetAddresses)
-            for (direccion in direcciones) {
-                // Filtramos para quedarnos estrictamente con una dirección IPv4 (ej. 192.168.1.5)
-                if (!direccion.isLoopbackAddress && direccion is Inet4Address) {
-                    val ip = direccion.hostAddress
-
-                    // Opcional: Si necesitas dar prioridad al Hotspot/Wi-Fi del celular,
-                    // sus nombres suelen empezar con "wlan", "ap" o "rndis".
-                    return ip
+        // Método 2: Fallback por interfaces
+        try {
+            val interfaces = NetworkInterface.getNetworkInterfaces()
+            while (interfaces.hasMoreElements()) {
+                val iface = interfaces.nextElement()
+                if (!iface.isUp || iface.isLoopback) continue
+                val addresses = iface.inetAddresses
+                while (addresses.hasMoreElements()) {
+                    val addr = addresses.nextElement()
+                    if (!addr.isLoopbackAddress && addr is java.net.Inet4Address) {
+                        val host = addr.hostAddress ?: continue
+                        if (host.startsWith("192.168.") || host.startsWith("10.") || host.startsWith(
+                                "172."
+                            )
+                        ) {
+                            return host
+                        }
+                    }
                 }
             }
+        } catch (e: Exception) {
         }
-    } catch (e: Exception) {
-        e.printStackTrace()
+
+        return "Desconocida"
     }
-    // Si el celular no está conectado a ninguna red (ni Wi-Fi ni Hotspot), devolverá null
-    return null
 }

@@ -6,102 +6,94 @@ import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import io.ktor.server.engine.EmbeddedServer
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.launch
 
 class TeatrinoService : Service() {
-    private var servidorWeb: EmbeddedServer<*, *>? = null
-    private val CHANNEL_ID = "TeatrinoServerChannel"
-
-    // Ámbito de corrutinas supervisor que protege a Ktor contra el ahorro de energía
-    private val servicioJob = SupervisorJob()
-    private val scopeServicio = CoroutineScope(Dispatchers.Default + servicioJob)
-
     companion object {
         var contextoAplicacion: Context? = null
     }
 
+    private var wakeLock: PowerManager.WakeLock? = null
+    private var wifiLock: WifiManager.WifiLock? = null
+    private var server: EmbeddedServer<*, *>? = null
+
     override fun onCreate() {
         super.onCreate()
         contextoAplicacion = applicationContext
-        crearCanalDeNotificacion()
-    }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val notificacion = construirNotificacion()
+        // 1. Evita que el CPU se duerma
+        val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+        wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Teatrino::ServerLock")
+        wakeLock?.acquire()
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(
-                1,
-                notificacion,
-                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
-            )
-        } else {
-            startForeground(1, notificacion)
-        }
+        // 2. Evita que el WiFi se corte al bloquear el dispositivo
+        val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+        wifiLock = wm.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "Teatrino::WifiLock")
+        wifiLock?.acquire()
 
-        // Iniciamos Ktor de forma segura vinculándolo al ciclo de vida del Foreground Service
-        scopeServicio.launch {
-            try {
-                if (servidorWeb == null) {
-                    val ipDetectada = obtenerIpLocal() ?: "127.0.0.1"
-                    MainActivity.ipServidor = ipDetectada
+        // 3. Levantar la notificación de primer plano obligatoria
+        startForeground(1, crearNotificacion())
 
-                    servidorWeb = iniciarServidorWeb()
-                    // wait = false evita congelar el hilo. El servidor vive gracias a scopeServicio.
-                    servidorWeb?.start(wait = false)
-                    println(" [LOG-SERVER] Ktor iniciado con éxito en CoroutineScope.")
-                }
-            } catch (e: Exception) {
-                println(" [LOG-SERVER] Error al arrancar Ktor: ${e.message}")
-                e.printStackTrace()
-            }
-        }
-
-        return START_NOT_STICKY
-    }
-
-    override fun onDestroy() {
-        // Detiene de golpe todas las corrutinas que use el servicio
-        servicioJob.cancel()
-
+        // 4. Arrancar el servidor web Ktor de forma asíncrona
         try {
-            servidorWeb?.stop(500, 1000)
-            servidorWeb = null
-            MainActivity.ipServidor = "Desconocida"
-            println(" [LOG-SERVER] Servidor Ktor detenido limpiamente.")
+            server = iniciarServidorWeb()
+            server?.start(wait = false)
+
+            // Sincronizar el estado global nativo al encender con éxito
+            MainActivity.servidorEncendido = true
+            MainActivity.ipServidor = NetworkUtils.obtenerIp(this)
         } catch (e: Exception) {
             e.printStackTrace()
         }
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        return START_STICKY // Si el sistema destruye el servicio por memoria, lo recrea automáticamente
+    }
+
+    override fun onDestroy() {
+        // Detener el servidor web de forma limpia y liberar puertos
+        try {
+            server?.stop(1000, 2000)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        // Liberar candados de hardware de inmediato
+        wakeLock?.let { if (it.isHeld) it.release() }
+        wifiLock?.let { if (it.isHeld) it.release() }
+
+        // Sincronizar estado global al apagar: Informar a la interfaz que el servidor cayó
+        MainActivity.servidorEncendido = false
+        MainActivity.ipServidor = "Desconocida"
 
         super.onDestroy()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    private fun crearCanalDeNotificacion() {
+    private fun crearNotificacion(): Notification {
+        val channelId = "teatrino_server"
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val canal = NotificationChannel(
-                CHANNEL_ID,
-                "Servidor de Audio Teatrino",
+            val channel = NotificationChannel(
+                channelId,
+                "Servidor Teatrino",
                 NotificationManager.IMPORTANCE_LOW
             )
-            val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-            manager.createNotificationChannel(canal)
+            getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         }
-    }
 
-    private fun construirNotificacion(): Notification {
-        return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Teatrino Sound Server")
-            .setContentText("El servidor inalámbrico está encendido y listo.")
-            .setSmallIcon(android.R.drawable.ic_media_play)
+        val ipActual = NetworkUtils.obtenerIp(this)
+
+        return NotificationCompat.Builder(this, channelId)
+            .setContentTitle("Teatrino activo")
+            .setContentText("Servidor en $ipActual:8080")
+            .setSmallIcon(R.mipmap.ic_launcher)
             .setOngoing(true)
             .build()
     }

@@ -9,23 +9,26 @@ import io.ktor.server.http.content.staticResources
 import io.ktor.server.routing.routing
 import io.ktor.server.websocket.WebSocketServerSession
 import io.ktor.server.websocket.WebSockets
+import io.ktor.server.websocket.pingPeriod
+import io.ktor.server.websocket.timeout
 import io.ktor.server.websocket.webSocket
 import io.ktor.websocket.Frame
 import io.ktor.websocket.readText
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlin.time.Duration.Companion.seconds
 
 class TeatrinoServerConfig {
     companion object {
         var sesionActiva: WebSocketServerSession? = null
 
         /**
-         * Envía la lista de sonidos actual de la sesión a la tablet de forma reactiva.
+         * Envía la lista de sonidos actual de la sesión a la tablet de forma reactiva y segura.
          */
         suspend fun forzarSincronizacionWeb() {
             val sesion = sesionActiva ?: return
             try {
-                // Copia segura de la lista de Compose libre de bloqueos de hilos
+                // Leemos la lista de sonidos de forma segura aislándola del hilo de Compose
                 val copiaEstatica =
                     androidx.compose.runtime.snapshots.Snapshot.withoutReadObservation {
                         MainActivity.listaSonidosSesion.toList()
@@ -42,40 +45,44 @@ class TeatrinoServerConfig {
                 val paquete = RespuestaBotonera(sonidos = listaSimplificada)
                 val jsonString = Json.encodeToString(paquete)
 
-                println("🚀 [LOG-SERVER] Forzando transmisión reactiva: $jsonString")
+                println("🚀 [LOG-SERVER] Forzando transmisión reactiva hacia la tablet: $jsonString")
                 sesion.send(Frame.Text(jsonString))
             } catch (e: Exception) {
                 println("❌ [LOG-SERVER] Error al sincronizar vía WebSocket: ${e.message}")
+                sesionActiva = null
             }
         }
     }
 }
 
 fun iniciarServidorWeb(): EmbeddedServer<CIOApplicationEngine, CIOApplicationEngine.Configuration> {
-    return embeddedServer(CIO, port = 8080, host = "0.0.0.0") {
+    return embeddedServer(CIO, configure = {
+        connectors.add(io.ktor.server.engine.EngineConnectorBuilder().apply {
+            port = 8080
+            host = "0.0.0.0"
+        })
+        reuseAddress = true
+    }) {
 
-        // Busca esto dentro de tu TeatrinoServer.kt y modifícalo para que quede así:
         install(WebSockets) {
-            pingPeriodMillis =
-                15_000L  // Envía un latido cada 15 segundos para mantener caliente el canal
-            timeoutMillis =
-                30_000L     // Si la tablet pasa 30 segundos sin responder, libera el socket
+            pingPeriod = 15.seconds
+            timeout = 30.seconds
             maxFrameSize = Long.MAX_VALUE
         }
 
-
         routing {
+            // Servir los archivos web estáticos (index.html, estilos.css, controlador.js)
             staticResources(remotePath = "/", basePackage = "static")
 
             webSocket("/socket") {
                 println("🔌 [LOG-SERVER] ¡Tablet conectada!")
                 TeatrinoServerConfig.sesionActiva = this
 
-                // VARIABLES DE MEMORIA DE LA SESIÓN DE AUDIO
                 var idSonidoActual: String? = null
                 var estaPausado = false
 
                 try {
+                    // Forzar sincronización inmediata al conectar para persistencia de la interfaz web
                     TeatrinoServerConfig.forzarSincronizacionWeb()
 
                     for (frame in incoming) {
@@ -84,7 +91,6 @@ fun iniciarServidorWeb(): EmbeddedServer<CIOApplicationEngine, CIOApplicationEng
                             try {
                                 val comando = Json.decodeFromString<ComandoTablet>(textoRecibido)
 
-                                // CASO 1: COMANDO DE STOP GENERAL
                                 if (comando.accion == "STOP") {
                                     println("⏹️ [LOG-SERVER] Comando STOP Global recibido")
                                     AudioPlayerManager.detenerAudio()
@@ -93,7 +99,6 @@ fun iniciarServidorWeb(): EmbeddedServer<CIOApplicationEngine, CIOApplicationEng
                                     continue
                                 }
 
-                                // NUEVO - CASO 2: COMANDO DE VOLUMEN INALÁMBRICO
                                 if (comando.accion == "VOLUME") {
                                     val vol = comando.valor
                                     if (vol != null) {
@@ -102,16 +107,13 @@ fun iniciarServidorWeb(): EmbeddedServer<CIOApplicationEngine, CIOApplicationEng
                                     continue
                                 }
 
-                                // CASO 2: COMANDO DE DISPARO / PAUSA (PLAY)
                                 if (comando.accion == "PLAY") {
                                     val sonidoEncontrado = MainActivity.listaSoundSesion(comando.id)
 
                                     if (sonidoEncontrado != null) {
-                                        // Leemos el contexto inyectado desde el Foreground Service de forma segura
                                         val contextoAndroid = TeatrinoService.contextoAplicacion
 
                                         if (contextoAndroid != null) {
-                                            // ¿Es el mismo sonido que ya está interactuando?
                                             if (idSonidoActual == comando.id) {
                                                 if (AudioPlayerManager.estaSonando()) {
                                                     AudioPlayerManager.pausarAudio()
@@ -122,14 +124,12 @@ fun iniciarServidorWeb(): EmbeddedServer<CIOApplicationEngine, CIOApplicationEng
                                                     estaPausado = false
                                                     println("▶️ [LOG-SERVER] Reanudando: ${sonidoEncontrado.nombreArchivo}")
                                                 } else {
-                                                    // Fallback por si terminó solo: arranca de cero
                                                     AudioPlayerManager.reproducirAudio(
                                                         contextoAndroid,
                                                         sonidoEncontrado.uriString
                                                     )
                                                 }
                                             } else {
-                                                // Es un sonido NUEVO o DIFERENTE: arranca de cero de inmediato
                                                 println("🎵 [LOG-SERVER] Cambiando de tema a: ${sonidoEncontrado.nombreArchivo}")
                                                 AudioPlayerManager.reproducirAudio(
                                                     contextoAndroid,
@@ -144,21 +144,23 @@ fun iniciarServidorWeb(): EmbeddedServer<CIOApplicationEngine, CIOApplicationEng
                                     }
                                 }
                             } catch (e: Exception) {
-                                println("❌ [LOG-SERVER] Error al decodificar: ${e.message}")
+                                println("❌ [LOG-SERVER] Error al decodificar comando JSON: ${e.message}")
                             }
                         }
                     }
                 } catch (e: Exception) {
+                    println("❌ [LOG-SERVER] Excepción en el bucle del WebSocket: ${e.message}")
                     e.printStackTrace()
                 } finally {
                     TeatrinoServerConfig.sesionActiva = null
-                    println("🔌 [LOG-SERVER] Tablet desconectada")
+                    println("🔌 [LOG-SERVER] Tablet desconectada. Canal liberado de forma limpia.")
                 }
             }
         }
     }
 }
 
+// Función de extensión corregida para buscar sonidos en la sesión de forma segura
 fun MainActivity.Companion.listaSoundSesion(id: String): Sonido? {
     return listaSonidosSesion.find { it.id == id }
 }

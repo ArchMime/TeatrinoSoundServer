@@ -1,14 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:tools="http://schemas.android.com/tools">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- Permisos de red que ya tenías -->
+    <!-- Permisos de red -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
-    <!-- 🔐 PERMISOS OBLIGATORIOS PARA ANDROID MODERNO (Impiden que la app muera en segundo plano) -->
+    <!-- Permisos para impedir que la app muera en segundo plano -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <application
         android:allowBackup="true"
@@ -34,12 +36,12 @@
             </intent-filter>
         </activity>
 
-        <!-- 🚀 SERVICIO DE PRIMER PLANO (Ahora sí, al mismo nivel que la activity) -->
+        <!-- Servicio de primer plano registrado correctamente -->
         <service
             android:name=".TeatrinoService"
-            android:foregroundServiceType="mediaPlayback"
             android:enabled="true"
-            android:exported="false" />
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
 
     </application>
 
